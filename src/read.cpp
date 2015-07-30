@@ -6,18 +6,18 @@
 
 namespace e57_pcl {
 
-cloud_normal_t::Ptr read_scan_with_normals(e57::Reader& reader, uint32_t scan_index);
+cloud_normal_t::Ptr read_scan_with_normals(e57::Reader& reader, uint32_t scan_index, const Eigen::Vector3d& demean_offset);
 
-cloud_normal_t::Ptr load_e57_cloud_with_normals(const std::string& input_file, std::string& guid) {
+cloud_normal_t::Ptr load_e57_cloud_with_normals(const std::string& input_file, std::string& guid, bool demean, Eigen::Vector3d* demean_offset) {
     cloud_normal_t::Ptr cloud(new cloud_normal_t());
-    std::vector<cloud_normal_t::Ptr> scans = load_e57_scans_with_normals(input_file, guid);
+    std::vector<cloud_normal_t::Ptr> scans = load_e57_scans_with_normals(input_file, guid, demean, demean_offset);
     for (auto scan : scans) {
         cloud->insert(cloud->end(), scan->begin(), scan->end());
     }
     return cloud;
 }
 
-std::vector<cloud_normal_t::Ptr> load_e57_scans_with_normals(const std::string& input_file, std::string& guid) {
+std::vector<cloud_normal_t::Ptr> load_e57_scans_with_normals(const std::string& input_file, std::string& guid, bool demean, Eigen::Vector3d* demean_offset) {
     std::vector<cloud_normal_t::Ptr> scans;
 
     try {
@@ -26,12 +26,25 @@ std::vector<cloud_normal_t::Ptr> load_e57_scans_with_normals(const std::string& 
         reader.GetE57Root(root);
 
         guid = root.guid;
-
+        
+        Eigen::Vector3d tmp_demean_offset = Eigen::Vector3d::Zero();
+        if (demean) {
+            e57::Data3D first_scan_header;
+            reader.ReadData3D(0, first_scan_header);
+            tmp_demean_offset[0] = -first_scan_header.pose.translation.x;
+            tmp_demean_offset[1] = -first_scan_header.pose.translation.y;
+            tmp_demean_offset[2] = -first_scan_header.pose.translation.z;
+        }
+        
         uint32_t scanCount = reader.GetData3DCount();
 
-		for (uint32_t scan_index = 0; scan_index < scanCount; ++scan_index) {
-            scans.push_back(read_scan_with_normals(reader, scan_index));
-		}
+        for (uint32_t scan_index = 0; scan_index < scanCount; ++scan_index) {
+            scans.push_back(read_scan_with_normals(reader, scan_index, tmp_demean_offset));
+        }
+        
+        if (demean && demean_offset) {
+            (*demean_offset) = tmp_demean_offset;
+        }
     } catch(std::exception& e) {
         throw std::runtime_error(std::string("Exception while loading E57 file with normal data:\n") + e.what());
     }
@@ -39,7 +52,7 @@ std::vector<cloud_normal_t::Ptr> load_e57_scans_with_normals(const std::string& 
     return scans;
 }
 
-cloud_normal_t::Ptr read_scan_with_normals(e57::Reader& reader, uint32_t scan_index) {
+cloud_normal_t::Ptr read_scan_with_normals(e57::Reader& reader, uint32_t scan_index, const Eigen::Vector3d& demean_offset) {
     e57::Data3D header;
     reader.ReadData3D(scan_index, header);
     int64_t nColumn = 0, nRow = 0, nPointsSize = 0, nGroupsSize = 0, nCounts = 0; bool bColumnIndex = 0;
@@ -47,7 +60,7 @@ cloud_normal_t::Ptr read_scan_with_normals(e57::Reader& reader, uint32_t scan_in
 
     int64_t n_size = (nRow > 0) ? nRow : 1024;
 
-    double *data_x = new double[n_size], *data_y = new double[n_size], *data_z = new double[n_size];//, *intensity = new double[n_size];
+    double *data_x = new double[n_size], *data_y = new double[n_size], *data_z = new double[n_size];
     double *nrm_x = new double[n_size], *nrm_y = new double[n_size], *nrm_z = new double[n_size];
     int8_t valid_normals = 0;
     auto block_read = reader.SetUpData3DPointsData(
@@ -57,28 +70,36 @@ cloud_normal_t::Ptr read_scan_with_normals(e57::Reader& reader, uint32_t scan_in
         data_y,
         data_z,
         NULL,
-        NULL, // intesity
+        NULL,
         NULL, NULL, NULL, NULL, NULL,
         nrm_x,
         nrm_y,
         nrm_z,
         &valid_normals
     );
+    
+    Eigen::Affine3d rotation;
+    rotation = Eigen::Quaterniond(header.pose.rotation.w, header.pose.rotation.x, header.pose.rotation.y, header.pose.rotation.z);
+    Eigen::Affine3d registration;
+    registration = Eigen::Translation<double, 3>(header.pose.translation.x + demean_offset[0], header.pose.translation.y + demean_offset[1], header.pose.translation.z + demean_offset[2]) * rotation;
+    Eigen::Affine3d normal_transformation;
+    normal_transformation = rotation.matrix().inverse().transpose();
 
     unsigned long size = 0;
-    //float imin = header.intensityLimits.intensityMinimum;
-    //float imax = header.intensityLimits.intensityMaximum;
     cloud_normal_t::Ptr scan(new cloud_normal_t());
     while((size = block_read.read()) > 0) {
         for(unsigned long i = 0; i < size; i++) {
             point_normal_t p;
-            p.x = data_x[i];
-            p.y = data_y[i];
-            p.z = data_z[i];
-            p.normal[0] = nrm_x[i];
-            p.normal[1] = nrm_y[i];
-            p.normal[2] = nrm_z[i];
-            //p.intensity = (intensity[i]-imin) / (imax-imin);
+            Eigen::Vector3d pos(data_x[i], data_y[i], data_z[i]);
+            pos = registration * pos;
+            p.x = static_cast<float>(pos[0]);
+            p.y = static_cast<float>(pos[1]);
+            p.z = static_cast<float>(pos[2]);
+            Eigen::Vector3d nrm(nrm_x[i], nrm_y[i], nrm_z[i]);
+            nrm = normal_transformation * nrm;
+            p.normal[0] = static_cast<float>(nrm[0]);
+            p.normal[1] = static_cast<float>(nrm[1]);
+            p.normal[2] = static_cast<float>(nrm[2]);
             scan->push_back(p);
         }
     }
@@ -92,7 +113,7 @@ cloud_normal_t::Ptr read_scan_with_normals(e57::Reader& reader, uint32_t scan_in
     delete [] nrm_z;
 
     // get origin position
-    scan->sensor_origin_ = Eigen::Vector4f(header.pose.translation.x, header.pose.translation.y, header.pose.translation.z, 1.0);
+    scan->sensor_origin_ = Eigen::Vector4f(header.pose.translation.x + demean_offset[0], header.pose.translation.y + demean_offset[1], header.pose.translation.z + demean_offset[2], 1.0);
 
     return scan;
 }
