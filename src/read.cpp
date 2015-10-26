@@ -40,39 +40,6 @@ load_e57_cloud_with_normals(const std::string& input_file, std::string& guid,
     return cloud;
 }
 
-Eigen::Vector3d get_first_scan_origin(const std::string& input_file, const std::vector<uint32_t>& scans_indices) {
-    Eigen::Vector3d origin;
-
-    try {
-        e57::Reader reader(input_file);
-        e57::E57Root root;
-        reader.GetE57Root(root);
-
-        uint32_t scan_count = reader.GetData3DCount();
-
-        std::vector<uint32_t> scan_subset;
-        if (scans_indices.empty()) {
-            scan_subset = std::vector<uint32_t>(scan_count);
-            std::iota(scan_subset.begin(), scan_subset.end(), 0);
-        } else {
-            scan_subset = scans_indices;
-        }
-
-        e57::Data3D first_scan_header;
-        reader.ReadData3D(scan_subset[0], first_scan_header);
-        origin[0] = -first_scan_header.pose.translation.x;
-        origin[1] = -first_scan_header.pose.translation.y;
-        origin[2] = -first_scan_header.pose.translation.z;
-    } catch (std::exception& e) {
-        throw std::runtime_error(
-            std::string(
-                "Exception while loading E57 file with normal data:\n") +
-            e.what());
-    }
-
-    return origin;
-}
-
 std::vector<cloud_normal_t::Ptr>
 load_e57_scans_with_normals(const std::string& input_file, std::string& guid,
                             bool demean, Eigen::Vector3d* demean_offset,
@@ -98,7 +65,7 @@ load_e57_scans_with_normals(const std::string& input_file, std::string& guid,
         Eigen::Vector3d tmp_demean_offset = Eigen::Vector3d::Zero();
         if (demean) {
             e57::Data3D first_scan_header;
-            reader.ReadData3D(scan_subset[0], first_scan_header);
+            reader.ReadData3D(0, first_scan_header);
             tmp_demean_offset[0] = -first_scan_header.pose.translation.x;
             tmp_demean_offset[1] = -first_scan_header.pose.translation.y;
             tmp_demean_offset[2] = -first_scan_header.pose.translation.z;

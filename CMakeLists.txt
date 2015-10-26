@@ -39,4 +39,7 @@ if (EIGEN_FOUND AND PCL_FOUND AND Boost_FOUND AND LIBE57_FOUND)
     install (TARGETS e57_pcl DESTINATION lib)
 	# install header
     install (DIRECTORY include/ DESTINATION include/e57_pcl)
+    # install find module
+    file (GLOB find_modules RELATIVE "${PROJECT_SOURCE_DIR}" "cmake/modules/self/*.cmake")
+    install (FILES ${find_modules} DESTINATION share/E57PCL)
 endif()
