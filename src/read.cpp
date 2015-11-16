@@ -26,14 +26,15 @@ get_scan_count(const std::string& input_file) {
 
 cloud_normal_t::Ptr read_scan_with_normals(
     e57::Reader& reader, uint32_t scan_index,
-    const Eigen::Vector3d& demean_offset);
+    const Eigen::Vector3d& demean_offset,
+    std::vector<Eigen::Vector3f>* colors = nullptr);
 
 cloud_normal_t::Ptr
 load_e57_cloud_with_normals(const std::string& input_file, std::string& guid,
-                            bool demean, Eigen::Vector3d* demean_offset) {
+                            bool demean, Eigen::Vector3d* demean_offset, std::vector<Eigen::Vector3f>* colors) {
     cloud_normal_t::Ptr cloud(new cloud_normal_t());
     std::vector<cloud_normal_t::Ptr> scans =
-        load_e57_scans_with_normals(input_file, guid, demean, demean_offset);
+        load_e57_scans_with_normals(input_file, guid, demean, demean_offset, std::vector<uint32_t>(), colors);
     for (auto scan : scans) {
         cloud->insert(cloud->end(), scan->begin(), scan->end());
     }
@@ -43,7 +44,8 @@ load_e57_cloud_with_normals(const std::string& input_file, std::string& guid,
 std::vector<cloud_normal_t::Ptr>
 load_e57_scans_with_normals(const std::string& input_file, std::string& guid,
                             bool demean, Eigen::Vector3d* demean_offset,
-                            const std::vector<uint32_t>& scans_indices) {
+                            const std::vector<uint32_t>& scans_indices,
+                            std::vector<Eigen::Vector3f>* colors) {
     std::vector<cloud_normal_t::Ptr> scans;
 
     try {
@@ -71,9 +73,10 @@ load_e57_scans_with_normals(const std::string& input_file, std::string& guid,
             tmp_demean_offset[2] = -first_scan_header.pose.translation.z;
         }
 
+        if (colors) colors->clear();
         for (uint32_t scan_index : scan_subset) {
             scans.push_back(
-                read_scan_with_normals(reader, scan_index, tmp_demean_offset));
+                read_scan_with_normals(reader, scan_index, tmp_demean_offset, colors));
         }
 
         if (demean && demean_offset) {
@@ -91,7 +94,8 @@ load_e57_scans_with_normals(const std::string& input_file, std::string& guid,
 
 cloud_normal_t::Ptr
 read_scan_with_normals(e57::Reader& reader, uint32_t scan_index,
-                       const Eigen::Vector3d& demean_offset) {
+                       const Eigen::Vector3d& demean_offset,
+                       std::vector<Eigen::Vector3f>* colors) {
     e57::Data3D header;
     reader.ReadData3D(scan_index, header);
     int64_t nColumn = 0, nRow = 0, nPointsSize = 0, nGroupsSize = 0,
@@ -106,10 +110,13 @@ read_scan_with_normals(e57::Reader& reader, uint32_t scan_index,
             * data_z = new double[n_size];
     double* nrm_x = new double[n_size], * nrm_y = new double[n_size],
             * nrm_z = new double[n_size];
-    int8_t valid_normals = 0;
+    uint16_t* col_r = colors ? new uint16_t[n_size] : NULL;
+    uint16_t* col_g = colors ? new uint16_t[n_size] : NULL;
+    uint16_t* col_b = colors ? new uint16_t[n_size] : NULL;
+    int8_t valid_normals = 0, valid_colors = 0;
     auto block_read = reader.SetUpData3DPointsData(
-        scan_index, n_size, data_x, data_y, data_z, NULL, NULL, NULL, NULL,
-        NULL, NULL, NULL, nrm_x, nrm_y, nrm_z, &valid_normals);
+        scan_index, n_size, data_x, data_y, data_z, NULL, NULL, NULL,
+        col_r, col_g, col_b, &valid_colors, nrm_x, nrm_y, nrm_z, &valid_normals);
 
     Eigen::Affine3d rotation;
     rotation =
@@ -140,6 +147,16 @@ read_scan_with_normals(e57::Reader& reader, uint32_t scan_index,
             p.normal[1] = static_cast<float>(nrm[1]);
             p.normal[2] = static_cast<float>(nrm[2]);
             scan->push_back(p);
+
+            if (colors) {
+                Eigen::Vector3f p_col;
+                float max_col = 255.f;
+                p_col <<
+                    static_cast<float>(col_r[i]) / max_col,
+                    static_cast<float>(col_g[i]) / max_col,
+                    static_cast<float>(col_b[i]) / max_col;
+                colors->push_back(p_col);
+            }
         }
     }
     block_read.close();
@@ -150,6 +167,11 @@ read_scan_with_normals(e57::Reader& reader, uint32_t scan_index,
     delete[] nrm_x;
     delete[] nrm_y;
     delete[] nrm_z;
+    if (colors) {
+        delete[] col_r;
+        delete[] col_g;
+        delete[] col_b;
+    }
 
     // get origin position
     scan->sensor_origin_ =
