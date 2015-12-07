@@ -6,6 +6,11 @@
 
 namespace e57_pcl {
 
+typedef std::vector<double> coords_t;
+typedef std::vector<uint16_t> colors_t;
+typedef std::tuple<coords_t, coords_t, coords_t> point_data_t;
+typedef std::tuple<colors_t, colors_t, colors_t> color_data_t;
+
 uint32_t
 get_scan_count(const std::string& input_file) {
     uint32_t scan_count;
@@ -181,6 +186,5 @@ read_scan_with_normals(e57::Reader& reader, uint32_t scan_index,
 
     return scan;
 }
-
 
 }  // e57_pcl
